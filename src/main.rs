@@ -1,3 +1,4 @@
+#![feature(conservative_impl_trait)]
 #![feature(plugin)]
 #![plugin(rocket_codegen)]
 
@@ -8,65 +9,93 @@ extern crate rocket;
 extern crate tokio_core;
 
 use futures::{ Future, Stream };
-use hyper::Client;
+use futures::future;
 use rocket::http::ContentType;
 use rocket::response::Content;
 use std::fs::File;
+use std::io;
 use std::io::Write;
+use std::path::PathBuf;
+
+struct PadGridError;
+
+impl From<io::Error> for PadGridError {
+
+    fn from(_: io::Error) -> PadGridError {
+        PadGridError
+    }
+
+}
+
+impl From<hyper::Error> for PadGridError {
+
+    fn from(_: hyper::Error) -> PadGridError {
+        PadGridError
+    }
+
+}
+
+fn cache_path_for_id(id: usize) -> PathBuf {
+    format!("cache/{}.png", id).into()
+}
+
+fn read_icon_cache(id: usize) -> impl Future<Item=File, Error=PadGridError> {
+    future::result(std::fs::File::open(cache_path_for_id(id)).map_err(From::from))
+}
+
+fn write_cache_for(id: usize, res: hyper::client::Response) -> impl Future<Item=(), Error=PadGridError> {
+    future::result(std::fs::File::create(cache_path_for_id(id))).from_err().and_then(move |cache| {
+        res.body().fold(cache, |mut cache, chunk| {
+            match cache.write_all(&chunk) {
+                Ok(_)    => { Ok(cache) }
+                Err(err) => { Err(err) }
+            }
+        }).from_err()
+    }).and_then(|_|{Ok(())})
+}
+
+fn download_icon(
+    id: usize,
+    handle: tokio_core::reactor::Handle
+) -> impl Future<Item=File, Error=PadGridError> {
+    let url_string = format!("http://www.puzzledragonx.com/en/img/book/{}.png", id);
+    let url = hyper::Url::parse(&url_string).unwrap();
+    let client = hyper::Client::new(&handle);
+    info!(target: "_", "{} not cached; downloading {}", id, url_string);
+    client.get(url).from_err().and_then(move |res| {
+        if !res.status().is_success() {
+            warn!(target: "_", "Received {} downloading {}", res.status(), url_string);
+            return Err(PadGridError)
+        }
+        Ok(res)
+    }).and_then(move |res| {
+        write_cache_for(id, res)
+    }).and_then(move |_| {
+        info!(target: "_", "Download succeeded, reopening cache file");
+        read_icon_cache(id)
+    }).or_else(move |_| {
+        warn!(target: "_", "Failed to cache {}", id);
+        let _ = std::fs::remove_file(cache_path_for_id(id));
+        Err(PadGridError)
+    })
+}
+
+fn monster_icon_file(
+    id: usize,
+    handle: tokio_core::reactor::Handle
+) -> impl Future<Item=File, Error=PadGridError> {
+    read_icon_cache(id).or_else(move |_| {
+        download_icon(id, handle)
+    })
+}
 
 #[get("/monsters/<id>")]
 fn monster(id: usize) -> Option<Content<File>> {
-    let path = format!("cache/{}.png", id);
-    let result = std::fs::File::open(&path);
-    match result {
-        Ok(file) => {
-            info!(target: "_", "cached in {}", path);
-            return Some(Content(ContentType::PNG, file));
-        }
-        _        => {
-            info!(target: "_", "downloading to {}", path);
-        }
-    }
-
-    let result = std::fs::File::create(&path);
-    let mut cache = match result {
-        Ok(file) => { file }
-        _        => {
-            info!(target: "_", "unable to create {}", path);
-            return None
-        }
-    };
-
     let mut core = tokio_core::reactor::Core::new().unwrap();
     let handle = core.handle();
-    let client = Client::new(&handle);
-
-    let url_string = format!("http://www.puzzledragonx.com/en/img/book/{}.png", id);
-    let url = hyper::Url::parse(&url_string).unwrap();
-    let work = client.get(url).and_then(|res| {
-        if !res.status().is_success() {
-            warn!(target: "_", "http status {} for {}", res.status(), url_string);
-            return Err(hyper::Error::Status)
-        }
-        Ok(res)
-    }).and_then(|res| {
-        info!(target: "_", "connected; writing to {}", path);
-        res.body().for_each(|chunk| {
-            cache.write_all(&chunk).map_err(From::from)
-        })
-    }).and_then(|_| {
-        info!(target: "_", "reopening {} to read", path);
-        std::fs::File::open(&path).map_err(From::from)
-    }).or_else(|err| {
-        info!(target: "_", "error writing cache to {}", path);
-        let _ = std::fs::remove_file(&path);
-        Err(err)
-    });
-
-    match core.run(work) {
-        Ok(file) => { Some(Content(ContentType::PNG, file)) }
-        _        => { None }
-    }
+    core.run(monster_icon_file(id, handle)).ok().map(|file| {
+        Content(ContentType::PNG, file)
+    })
 }
 
 fn main() {
