@@ -7,7 +7,9 @@ authors = ["Keith Bauer <onesadcookie@gmail.com>"]
 futures = "*"
 hyper = { git = "https://github.com/hyperium/hyper.git" }
 image = "*"
+lazy_static = "*"
 log = "*"
+regex = "*"
 rocket = "0.2.1"
 rocket_codegen = "0.2.1"
 tokio-core = "*"

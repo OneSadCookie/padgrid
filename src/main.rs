@@ -4,7 +4,9 @@
 
 extern crate futures;
 extern crate hyper;
+#[macro_use] extern crate lazy_static;
 #[macro_use] extern crate log;
+extern crate regex;
 extern crate rocket;
 extern crate tokio_core;
 
@@ -16,6 +18,7 @@ use std::fs::File;
 use std::io;
 use std::io::Write;
 use std::path::PathBuf;
+use regex::Regex;
 
 struct PadGridError;
 
@@ -89,8 +92,18 @@ fn monster_icon_file(
     })
 }
 
-#[get("/monsters/<id>")]
-fn monster(id: usize) -> Option<Content<File>> {
+#[get("/monsters/<filename>")]
+fn monster(filename: &str) -> Option<Content<File>> {
+    lazy_static! {
+        static ref FILENAME_RE: Regex = Regex::new(r"(\d+)(?i:\.png)?").unwrap();
+    }
+    let id = match FILENAME_RE.captures(filename) {
+        Some(captures) => {
+            captures[1].parse().unwrap()
+        }
+        None => { return None }
+    };
+
     let mut core = tokio_core::reactor::Core::new().unwrap();
     let handle = core.handle();
     core.run(monster_icon_file(id, handle)).ok().map(|file| {
