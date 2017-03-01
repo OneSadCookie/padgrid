@@ -95,7 +95,7 @@ fn monster_icon_file(
 #[get("/monsters/<filename>")]
 fn monster(filename: &str) -> Option<Content<File>> {
     lazy_static! {
-        static ref FILENAME_RE: Regex = Regex::new(r"(\d+)(?i:\.png)?").unwrap();
+        static ref FILENAME_RE: Regex = Regex::new(r"^(\d+)(?i:\.png)?$").unwrap();
     }
     let id: usize = match FILENAME_RE.captures(filename) {
         Some(captures) => {
@@ -111,6 +111,25 @@ fn monster(filename: &str) -> Option<Content<File>> {
     })
 }
 
+#[get("/grid/<description>")]
+fn grid(description: &str) -> Option<String> {
+    lazy_static! {
+        static ref STRIP_EXT_RE: Regex = Regex::new(r"^(.*?)(?i:\.png)?$").unwrap();
+    }
+    let description = &STRIP_EXT_RE.captures(description).unwrap()[1];
+    let monsters = description.split(";").map(|row| {
+        row.split(",").map(|s| { s.parse::<usize>() }).collect::<Vec<_>>()
+    }).collect::<Vec<_>>();
+
+    let rows = monsters.len();
+    let cols = monsters.iter().map(|row| { row.len() }).max().unwrap_or(0);
+
+    Some(format!("{}x{}: {:?}", cols, rows, monsters))
+}
+
 fn main() {
-    rocket::ignite().mount("/", routes![monster]).launch();
+    rocket::ignite().mount("/", routes![
+        grid,
+        monster
+    ]).launch();
 }
