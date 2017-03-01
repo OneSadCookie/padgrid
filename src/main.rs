@@ -97,7 +97,7 @@ fn monster(filename: &str) -> Option<Content<File>> {
     lazy_static! {
         static ref FILENAME_RE: Regex = Regex::new(r"(\d+)(?i:\.png)?").unwrap();
     }
-    let id = match FILENAME_RE.captures(filename) {
+    let id: usize = match FILENAME_RE.captures(filename) {
         Some(captures) => {
             captures[1].parse().unwrap()
         }
