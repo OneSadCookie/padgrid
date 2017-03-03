@@ -4,6 +4,7 @@
 
 extern crate futures;
 extern crate hyper;
+extern crate image;
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate log;
 extern crate regex;
@@ -12,14 +13,16 @@ extern crate tokio_core;
 
 use futures::{ Future, Stream };
 use futures::future;
+use image::{ DynamicImage, GenericImage, ImageFormat };
 use rocket::http::ContentType;
 use rocket::response::Content;
 use std::fs::File;
 use std::io;
-use std::io::Write;
+use std::io::{ BufReader, Write };
 use std::path::PathBuf;
 use regex::Regex;
 
+#[derive(Debug)]
 struct PadGridError;
 
 impl From<io::Error> for PadGridError {
@@ -33,6 +36,14 @@ impl From<io::Error> for PadGridError {
 impl From<hyper::Error> for PadGridError {
 
     fn from(_: hyper::Error) -> PadGridError {
+        PadGridError
+    }
+
+}
+
+impl From<image::ImageError> for PadGridError {
+
+    fn from(_: image::ImageError) -> PadGridError {
         PadGridError
     }
 
@@ -92,6 +103,82 @@ fn monster_icon_file(
     })
 }
 
+fn monster_icon(
+    id: usize,
+    handle: tokio_core::reactor::Handle
+) -> impl Future<Item=DynamicImage, Error=PadGridError> {
+    monster_icon_file(id, handle).and_then(move |file| {
+        image::load(BufReader::new(file), ImageFormat::PNG).map_err(From::from)
+    })
+}
+
+enum GridCell {
+    Empty,
+    Annotation(char),
+    Icon(DynamicImage),
+}
+
+impl std::fmt::Debug for GridCell {
+
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        use GridCell::*;
+        match *self {
+            Empty => {
+                write!(f, "[]")
+            },
+            Annotation(c) => {
+                write!(f, "[{}]", c)
+            },
+            Icon(ref img) => {
+                write!(f, "[{}x{}]", img.width(), img.height())
+            }
+        }
+    }
+
+}
+
+fn cell_desc_to_cell(
+    cell_desc: String,
+    handle: tokio_core::reactor::Handle,
+) -> impl Future<Item=GridCell, Error=PadGridError> {
+    let fallback_cell = match cell_desc.len() {
+        0 => { GridCell::Empty }
+        1 => { GridCell::Annotation(cell_desc.chars().nth(0).unwrap()) },
+        _ => { GridCell::Annotation('?') }
+    };
+    future::result(cell_desc.parse::<usize>()).and_then(move |id| {
+        monster_icon(id, handle).map(move |image| {
+            GridCell::Icon(image)
+        }).or_else(move |_| {
+            Ok(GridCell::Annotation('?'))
+        })
+    }).or_else(move |_| -> Result<GridCell, PadGridError> {
+        Ok(fallback_cell)
+    })
+}
+
+fn row_desc_to_cells(
+    row_desc: Vec<String>,
+    handle: tokio_core::reactor::Handle
+) -> impl Future<Item=Vec<GridCell>, Error=PadGridError> {
+    let handles = std::iter::repeat(handle);
+    let cell_futures = row_desc.into_iter().zip(handles).map(move |(cell_desc, handle)| {
+        cell_desc_to_cell(cell_desc, handle)
+    });
+    future::join_all(cell_futures)
+}
+
+fn grid_desc_to_cells(
+    grid_desc: Vec<Vec<String>>,
+    handle: tokio_core::reactor::Handle
+) -> impl Future<Item=Vec<Vec<GridCell>>, Error=PadGridError> {
+    let handles = std::iter::repeat(handle);
+    let row_futures = grid_desc.into_iter().zip(handles).map(move |(row_desc, handle)| {
+        row_desc_to_cells(row_desc, handle)
+    });
+    future::join_all(row_futures)
+}
+
 #[get("/monsters/<filename>")]
 fn monster(filename: &str) -> Option<Content<File>> {
     lazy_static! {
@@ -117,14 +204,19 @@ fn grid(description: &str) -> Option<String> {
         static ref STRIP_EXT_RE: Regex = Regex::new(r"^(.*?)(?i:\.png)?$").unwrap();
     }
     let description = &STRIP_EXT_RE.captures(description).unwrap()[1];
-    let monsters = description.split(";").map(|row| {
-        row.split(",").map(|s| { s.parse::<usize>() }).collect::<Vec<_>>()
-    }).collect::<Vec<_>>();
+    let grid_desc = description.split(";").map(|row| {
+        row.split(",").map(ToOwned::to_owned).collect::<Vec<String>>()
+    }).collect::<Vec<Vec<String>>>();
 
-    let rows = monsters.len();
-    let cols = monsters.iter().map(|row| { row.len() }).max().unwrap_or(0);
+    let mut core = tokio_core::reactor::Core::new().unwrap();
+    let handle = core.handle();
 
-    Some(format!("{}x{}: {:?}", cols, rows, monsters))
+    let grid = core.run(grid_desc_to_cells(grid_desc, handle)).unwrap();
+
+    let rows = grid.len();
+    let cols = grid.iter().map(|row| { row.len() }).max().unwrap_or(0);
+
+    Some(format!("{}x{}: {:?}", cols, rows, grid))
 }
 
 fn main() {
