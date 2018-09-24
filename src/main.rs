@@ -1,4 +1,3 @@
-#![feature(conservative_impl_trait)]
 #![feature(plugin)]
 #![plugin(rocket_codegen)]
 
@@ -14,7 +13,7 @@ extern crate tokio_core;
 use futures::{ Future, Stream };
 use futures::future;
 use image::{ DynamicImage, GenericImage, ImageFormat };
-use rocket::http::ContentType;
+use rocket::http::{ ContentType, RawStr };
 use rocket::response::Content;
 use std::fs::File;
 use std::io;
@@ -180,7 +179,7 @@ fn grid_desc_to_cells(
 }
 
 #[get("/monsters/<filename>")]
-fn monster(filename: &str) -> Option<Content<File>> {
+fn monster(filename: &RawStr) -> Option<Content<File>> {
     lazy_static! {
         static ref FILENAME_RE: Regex = Regex::new(r"^(\d+)(?i:\.png)?$").unwrap();
     }
@@ -199,7 +198,7 @@ fn monster(filename: &str) -> Option<Content<File>> {
 }
 
 #[get("/grid/<description>")]
-fn grid(description: &str) -> Option<String> {
+fn grid(description: &RawStr) -> Option<String> {
     lazy_static! {
         static ref STRIP_EXT_RE: Regex = Regex::new(r"^(.*?)(?i:\.png)?$").unwrap();
     }

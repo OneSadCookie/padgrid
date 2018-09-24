@@ -1,3 +1,6 @@
+At [4172b22](https://github.com/OneSadCookie/padgrid/commit/4172b22aca8d5ac43d5d99d0455a6f5c046a16a4),
+demonstrated a crash with `impl trait`. Works on latest compiler versions.
+
 ```
 error: internal compiler error: src/librustc_trans/common.rs:473: Encountered er
 ror `Unimplemented` selecting `Binder(<std::vec::Vec<futures::future::join_all::
